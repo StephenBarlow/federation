@@ -8,6 +8,7 @@ orbs:
   # We could use Renovate to bump this version via PR, but that's not set up now.
   oss: apollo/oss-ci-cd-tooling@0.0.15
   rust: circleci/rust@1.0.0
+  win: circleci/windows@2.3.0
 
 commands:
   # These are the steps used for each version of Node which we're testing
@@ -44,6 +45,19 @@ commands:
           path: reports/junit
       - store_artifacts:
           path: reports/junit
+
+executors:
+  rust_linux: &rust_linux_executor
+    docker:
+      - image: cimg/base:stable
+  rust_macos: &rust_macos_executor
+    macos:
+      xcode: 11.4
+  rust_windows: &rust_windows_executor
+    machine:
+      image: 'windows-server-2019-vs2019:stable'
+    resource_class: windows.medium
+    shell: powershell.exe -ExecutionPolicy Bypass
 
 # Important! When adding a new job to `jobs`, make sure to define when it
 # executes by also adding it to the `workflows` section below!
@@ -95,11 +109,44 @@ jobs:
       - run:
           command: npm run codegen:check
   Rust:
-    docker:
-      - image: cimg/rust:1.51.0-node
+    parameters:
+      platform:
+        type: executor
+    executor: << parameters.platform >>
     steps:
       - checkout
-      - run: npm install -g wasm-pack
+      # - run: npm install -g wasm-pack
+      - when:
+          condition:
+            equal: [ *rust_macos_executor, << parameters.platform >> ]
+          steps:
+            - run: echo 'I am Steve Jobs'
+            - run:
+                name: Install Node.js
+                environment:
+                  NODE_VERSION: 14.16.0
+                command: |
+                  curl "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}.pkg" > "$HOME/Downloads/node.pkg" && sudo installer -store -pkg "$HOME/Downloads/node.pkg" -target "/"
+      - when:
+          condition:
+            equal: [ *rust_linux_executor, << parameters.platform >> ]
+          steps:
+            - run: echo 'I am Linus'
+            - run:
+                name: Install Node.js
+                environment:
+                  NODE_VERSION: 14.16.0
+                command: |
+                  sudo apt-get update
+                  curl -o nodejs.deb https://deb.nodesource.com/node_14.x/pool/main/n/nodejs/nodejs_${NODE_VERSION}-1nodesource1_amd64.deb
+                  sudo apt-get install -y ./nodejs.deb
+                  sudo apt-get -f install
+      - when:
+          condition:
+            equal: [ *rust_windows_executor, << parameters.platform >> ]
+          steps:
+            - run: echo 'I am Bill Gates'
+            - run: choco install nodejs-lts
       - run: npm install
       - run: cargo test --workspace --locked
 
@@ -138,7 +185,13 @@ workflows:
       - GraphQL Types:
           name: "GraphQL Types (up to date)"
           <<: *common_non_publish_filters
-      - Rust
+      - Rust:
+          matrix:
+            parameters:
+              platform:
+                - rust_macos
+                - rust_windows
+                - rust_linux
       - oss/lerna_tarballs:
           name: "JS: Package tarballs"
           <<: *common_non_publish_filters
