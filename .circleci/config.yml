@@ -94,6 +94,14 @@ jobs:
       - oss/npm_clean_install_with_caching
       - run:
           command: npm run codegen:check
+  Rust:
+    docker:
+      - image: cimg/rust:1.51.0-node
+    steps:
+      - checkout
+      - run: npm install -g wasm-pack
+      - run: npm install
+      - run: cargo test --workspace --locked
 
 # XXX We used to use this filter to only run a "Docs" job on docs branches.
 #     Now we use it to disable all jobs. It's unclear if there's a simpler way
@@ -130,12 +138,14 @@ workflows:
       - GraphQL Types:
           name: "GraphQL Types (up to date)"
           <<: *common_non_publish_filters
+      - Rust
       - oss/lerna_tarballs:
           name: "JS: Package tarballs"
           <<: *common_non_publish_filters
           requires:
             - "JS: Node 12"
             - "JS: Node 14"
+            - Rust
             - "GraphQL Types (up to date)"
       - oss/dry_run:
           name: "JS: Dry-run"
@@ -143,6 +153,7 @@ workflows:
           requires:
             - "JS: Node 12"
             - "JS: Node 14"
+            - Rust
             - "GraphQL Types (up to date)"
       - oss/confirmation:
           name: "JS: Confirmation"
