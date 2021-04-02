@@ -121,6 +121,20 @@ export interface KeyDirectivesMap {
  */
 type ValueTypes = Set<string>;
 
+function getOrSetRecord<V, D extends V>(
+  record: Record<string, V>,
+  key: string,
+  defaultValueFunc: (k: string) => D,
+): V {
+  const alreadyThere = record[key];
+  if (alreadyThere) {
+    return alreadyThere;
+  }
+  const insertMe = defaultValueFunc(key);
+  record[key] = insertMe;
+  return insertMe;
+}
+
 /**
  * Loop over each service and process its typeDefs (`definitions`)
  * - build up typeToServiceMap
@@ -162,16 +176,15 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
 
         for (const keyDirective of findDirectivesOnNode(definition, 'key')) {
           if (
-            keyDirective.arguments &&
+            keyDirective.arguments?.[0] &&
             isStringValueNode(keyDirective.arguments[0].value)
           ) {
             // Initialize the entry for this type if necessary
-            keyDirectivesMap[typeName] = keyDirectivesMap[typeName] || {};
+            const serviceNameToKeyDirectives = getOrSetRecord(keyDirectivesMap, typeName, () => ({}));
             // Initialize the entry for this service if necessary
-            keyDirectivesMap[typeName][serviceName] =
-              keyDirectivesMap[typeName][serviceName] || [];
+            const keyDirectives = getOrSetRecord(serviceNameToKeyDirectives, serviceName, () => []);
             // Add @key metadata to the array
-            keyDirectivesMap[typeName][serviceName]!.push(
+            keyDirectives.push(
               parseSelections(keyDirective.arguments[0].value.value),
             );
           }
@@ -185,13 +198,11 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
          * 1. It was declared by a previous service, but this newer one takes precedence, or...
          * 2. It was extended by a service before declared
          */
-        if (!typeToServiceMap[typeName]) {
-          typeToServiceMap[typeName] = {
-            extensionFieldsToOwningServiceMap: Object.create(null),
-          };
-        }
+        const serviceMap = getOrSetRecord(typeToServiceMap, typeName, () => ({
+          extensionFieldsToOwningServiceMap: Object.create(null),
+        }))
 
-        typeToServiceMap[typeName].owningService = serviceName;
+        serviceMap.owningService = serviceName;
 
         /**
          * If this type already exists in the definitions map, push this definition to the array (newer defs
@@ -200,22 +211,18 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
          *
          * If not, create the definitions array and add it to the typeDefinitionsMap.
          */
-        if (typeDefinitionsMap[typeName]) {
+        const typeDefinitions = getOrSetRecord(typeDefinitionsMap, typeName, () => []);
+        if (typeDefinitions.length) {
           const isValueType = typeNodesAreEquivalent(
-            typeDefinitionsMap[typeName][
-              typeDefinitionsMap[typeName].length - 1
-            ],
+            typeDefinitions[typeDefinitions.length - 1]!,
             definition,
           );
 
           if (isValueType) {
             valueTypes.add(typeName);
           }
-
-          typeDefinitionsMap[typeName].push({ ...definition, serviceName });
-        } else {
-          typeDefinitionsMap[typeName] = [{ ...definition, serviceName }];
         }
+        typeDefinitions.push({ ...definition, serviceName });
       } else if (isTypeExtensionNode(definition)) {
         const typeName = definition.name.value;
 
@@ -237,9 +244,10 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
            * and add the extensionFieldsToOwningServiceMap, but don't add a serviceName. That will be added once that service
            * definition is processed.
            */
-          if (typeToServiceMap[typeName]) {
-            typeToServiceMap[typeName].extensionFieldsToOwningServiceMap = {
-              ...typeToServiceMap[typeName].extensionFieldsToOwningServiceMap,
+          const serviceMap = typeToServiceMap[typeName];
+          if (serviceMap) {
+            serviceMap.extensionFieldsToOwningServiceMap = {
+              ...serviceMap.extensionFieldsToOwningServiceMap,
               ...fields,
             };
           } else {
@@ -257,9 +265,10 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
             serviceName,
           );
 
-          if (typeToServiceMap[typeName]) {
-            typeToServiceMap[typeName].extensionFieldsToOwningServiceMap = {
-              ...typeToServiceMap[typeName].extensionFieldsToOwningServiceMap,
+          const serviceMap = typeToServiceMap[typeName];
+          if (serviceMap) {
+            serviceMap.extensionFieldsToOwningServiceMap = {
+              ...serviceMap.extensionFieldsToOwningServiceMap,
               ...values,
             };
           } else {
@@ -274,11 +283,10 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
          * array (since a type can be extended by multiple services). If not, create the extensions array
          * and add it to the typeExtensionsMap.
          */
-        if (typeExtensionsMap[typeName]) {
-          typeExtensionsMap[typeName].push({ ...definition, serviceName });
-        } else {
-          typeExtensionsMap[typeName] = [{ ...definition, serviceName }];
-        }
+        getOrSetRecord(typeExtensionsMap, typeName, () => []).push({
+          ...definition,
+          serviceName,
+        });
       } else if (definition.kind === Kind.DIRECTIVE_DEFINITION) {
         const directiveName = definition.name.value;
 
@@ -299,15 +307,9 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
           locations: executableLocations,
         };
 
-        if (directiveDefinitionsMap[directiveName]) {
-          directiveDefinitionsMap[directiveName][
-            serviceName
-          ] = definitionWithExecutableLocations;
-        } else {
-          directiveDefinitionsMap[directiveName] = {
-            [serviceName]: definitionWithExecutableLocations,
-          };
-        }
+        getOrSetRecord(directiveDefinitionsMap, directiveName, () => ({}))[
+          serviceName
+        ] = definitionWithExecutableLocations;
       }
     }
   }
@@ -393,14 +395,14 @@ export function buildSchemaFromDefinitionsAndExtensions({
         return [
           ...rest,
           {
-            ...first,
+            ...first!,
             interfaces: Array.from(uniqueInterfaces.values()),
           },
         ];
 
       }),
       ...Object.values(directiveDefinitionsMap).map(
-        definitions => Object.values(definitions)[0],
+        definitions => Object.values(definitions)[0]!,
       ),
     ],
   };
@@ -493,7 +495,7 @@ export function addFederationMetadataToSchemaNodes({
 
         if (
           providesDirective &&
-          providesDirective.arguments &&
+          providesDirective.arguments?.[0] &&
           isStringValueNode(providesDirective.arguments[0].value)
         ) {
           const fieldFederationMetadata: FederationField = {
@@ -543,7 +545,7 @@ export function addFederationMetadataToSchemaNodes({
 
         if (
           requiresDirective &&
-          requiresDirective.arguments &&
+          requiresDirective.arguments?.[0] &&
           isStringValueNode(requiresDirective.arguments[0].value)
         ) {
           const fieldFederationMetadata: FederationField = {
@@ -585,19 +587,21 @@ export function addFederationMetadataToSchemaNodes({
   }
 
   // add all definitions of a specific directive for validation later
-  for (const directiveName of Object.keys(directiveDefinitionsMap)) {
+  for (const [directiveName, directiveDefinitions] of Object.entries(
+    directiveDefinitionsMap,
+  )) {
     const directive = schema.getDirective(directiveName);
     if (!directive) continue;
 
     const directiveFederationMetadata: FederationDirective = {
       ...getFederationMetadata(directive),
-      directiveDefinitions: directiveDefinitionsMap[directiveName],
-    }
+      directiveDefinitions,
+    };
 
     directive.extensions = {
       ...directive.extensions,
       federation: directiveFederationMetadata,
-    }
+    };
   }
 }
 
